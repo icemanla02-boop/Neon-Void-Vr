@@ -1,9 +1,10 @@
 
 import * as THREE from "https://cdn.jsdelivr.net/npm/three@0.155/build/three.module.js";
 import { VRButton } from "https://cdn.jsdelivr.net/npm/three@0.155/examples/jsm/webxr/VRButton.js";
+import { XRHandModelFactory } from "https://cdn.jsdelivr.net/npm/three@0.155/examples/jsm/webxr/XRHandModelFactory.js";
 
-let scene, camera, renderer;
-let controller;
+let scene, camera, renderer, listener;
+let controller1, controller2;
 let enemies=[];
 let bullets=[];
 let score=0;
@@ -24,19 +25,74 @@ renderer.xr.enabled=true;
 document.body.appendChild(renderer.domElement);
 document.body.appendChild(VRButton.createButton(renderer));
 
+listener=new THREE.AudioListener();
+camera.add(listener);
+
 const light=new THREE.HemisphereLight(0xffffff,0x444444,2);
 scene.add(light);
 
 createStarfield();
-createCrosshair();
-
-controller=renderer.xr.getController(0);
-controller.addEventListener("select",shoot);
-scene.add(controller);
+setupHands();
 
 document.getElementById("start").onclick=startGame;
 
 renderer.setAnimationLoop(loop);
+
+}
+
+function setupHands(){
+
+const handFactory=new XRHandModelFactory();
+
+controller1=renderer.xr.getController(0);
+controller2=renderer.xr.getController(1);
+
+scene.add(controller1);
+scene.add(controller2);
+
+const hand1=renderer.xr.getHand(0);
+const hand2=renderer.xr.getHand(1);
+
+hand1.add(handFactory.createHandModel(hand1));
+hand2.add(handFactory.createHandModel(hand2));
+
+scene.add(hand1);
+scene.add(hand2);
+
+addBlaster(hand1);
+addBlaster(hand2);
+
+controller1.addEventListener("select",()=>shoot(hand1));
+controller2.addEventListener("select",()=>shoot(hand2));
+
+}
+
+function addBlaster(hand){
+
+const gun=new THREE.Group();
+
+const body=new THREE.Mesh(
+new THREE.BoxGeometry(0.05,0.05,0.25),
+new THREE.MeshStandardMaterial({color:0x222222})
+);
+
+gun.add(body);
+
+const barrel=new THREE.Mesh(
+new THREE.CylinderGeometry(0.01,0.01,0.2),
+new THREE.MeshStandardMaterial({color:0x00ffff})
+);
+
+barrel.rotation.x=Math.PI/2;
+barrel.position.z=-0.25;
+
+gun.add(barrel);
+
+gun.position.set(0,0,-0.1);
+
+hand.add(gun);
+
+hand.userData.gun=gun;
 
 }
 
@@ -57,29 +113,20 @@ verts.push(
 
 geo.setAttribute("position",new THREE.Float32BufferAttribute(verts,3));
 
-const mat=new THREE.PointsMaterial({size:0.7});
-
-const stars=new THREE.Points(geo,mat);
-scene.add(stars);
-
-}
-
-function createCrosshair(){
-
-const geo=new THREE.RingGeometry(0.02,0.04,32);
-const mat=new THREE.MeshBasicMaterial({color:0x00ffff});
-
-const crosshair=new THREE.Mesh(geo,mat);
-crosshair.position.z=-2;
-
-camera.add(crosshair);
-scene.add(camera);
+scene.add(new THREE.Points(
+geo,
+new THREE.PointsMaterial({size:0.7})
+));
 
 }
 
 function startGame(){
 
 document.getElementById("start").style.display="none";
+
+navigator.xr.requestSession("immersive-vr")
+.then(session=>renderer.xr.setSession(session));
+
 spawnFleet();
 
 }
@@ -97,6 +144,7 @@ setTimeout(spawnFleet,5000);
 function spawnEnemy(){
 
 const geo=new THREE.IcosahedronGeometry(0.5);
+
 const mat=new THREE.MeshStandardMaterial({
 color:0xff3300,
 emissive:0xff3300
@@ -117,21 +165,49 @@ enemies.push(enemy);
 
 }
 
-function shoot(){
+function shoot(hand){
 
-const geo=new THREE.SphereGeometry(0.05);
-const mat=new THREE.MeshBasicMaterial({color:0x00ffff});
+const gun=hand.userData.gun;
 
-const bullet=new THREE.Mesh(geo,mat);
+gun.position.z+=0.05;
 
-bullet.position.setFromMatrixPosition(controller.matrixWorld);
+setTimeout(()=>gun.position.z-=0.05,60);
 
-const dir=new THREE.Vector3(0,0,-1).applyQuaternion(controller.quaternion);
+const beam=new THREE.Mesh(
+new THREE.CylinderGeometry(0.01,0.01,2),
+new THREE.MeshBasicMaterial({color:0x00ffff})
+);
 
-bullet.userData.vel=dir.multiplyScalar(1.5);
+beam.rotation.x=Math.PI/2;
 
-scene.add(bullet);
-bullets.push(bullet);
+beam.position.setFromMatrixPosition(hand.matrixWorld);
+
+const dir=new THREE.Vector3(0,0,-1).applyQuaternion(hand.quaternion);
+
+beam.userData.vel=dir.multiplyScalar(2);
+
+scene.add(beam);
+bullets.push(beam);
+
+playShootSound(hand);
+
+}
+
+function playShootSound(hand){
+
+const sound=new THREE.PositionalAudio(listener);
+
+const oscillator=listener.context.createOscillator();
+
+oscillator.type="square";
+oscillator.frequency.value=600;
+
+oscillator.connect(sound.gain);
+
+oscillator.start();
+oscillator.stop(listener.context.currentTime+0.05);
+
+hand.add(sound);
 
 }
 
@@ -178,7 +254,7 @@ bullets.forEach((b,bi)=>{
 
 enemies.forEach((e,ei)=>{
 
-if(b.position.distanceTo(e.position)<0.6){
+if(b.position.distanceTo(e.position)<0.8){
 
 scene.remove(e);
 scene.remove(b);
